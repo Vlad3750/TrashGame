@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EcoGrasp — grow a tree, fell the Garbage Titan</title>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <!-- HUD overlay -->
+    <div id="hud">
+      <div class="top">
+        <div class="stat">
+          <div class="stat-label">🌱 Seeds</div>
+          <div class="stat-value" id="seedCount">0 / 20</div>
+          <div class="bar"><span id="seedBar"></span></div>
+        </div>
+        <div class="stat" id="treeStat">
+          <div class="stat-label">🌳 Tree</div>
+          <div class="stat-value" id="treeSize">1.0×</div>
+          <div class="stat-hint" id="treeHint">grow to 3.0×</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <b>A/D</b> or <b>←/→</b> move · <b>W / Space / ↑</b> jump · <b>move the mouse</b> to swing your tree ·
+        clear enemies, dodge the toxic waste, collect <b>20 seeds</b> to topple the Titan
+      </div>
+
+      <div class="banner" id="banner"></div>
+    </div>
+
+    <!-- Intro -->
+    <div id="intro" class="overlay">
+      <div class="card">
+        <div class="logo">Eco<span>Grasp</span> 🌳</div>
+        <p class="tag">A climate platformer · powered by your growing tree</p>
+        <ul>
+          <li>🌱 Collect <b>seeds</b> — each one grows your tree-weapon</li>
+          <li>🖱️ Your tree follows the <b>mouse</b>. Swing it into trash enemies</li>
+          <li>☠️ <b>Toxic waste</b> (the glowing pools) is instant death — checkpoints save you</li>
+          <li>🗑️ The <b>Garbage Titan</b> only falls to a tree <b>3× your size (20 seeds)</b> — explore the high road to grow it</li>
+        </ul>
+        <button id="playBtn" class="btn">▶ Play</button>
+      </div>
+    </div>
+
+    <!-- Win -->
+    <div id="win" class="overlay" style="display:none">
+      <div class="card">
+        <div class="logo">You did it! 🌍</div>
+        <p class="tag">The Garbage Titan is defeated and the world turns green again.</p>
+        <button id="restartBtn" class="btn">↻ Play again</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
