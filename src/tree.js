@@ -1,5 +1,15 @@
-import { Actor, Circle, CollisionType, Rectangle, vec } from 'excalibur'
-import { COL, TREE } from './config.js'
+import { Actor, CollisionType, vec } from 'excalibur'
+import { TREE } from './config.js'
+import { Resources } from './resources.js'
+
+// tree.png is 544x612; its leafy canopy center sits ~70% of the way up from the
+// trunk base (measured). We anchor the sprite at its base (the player's hands)
+// and scale it so the canopy center lands at the weapon's reach.
+const TREE_NATURAL_H = 612
+const CANOPY_CENTER_FRAC = 0.70
+// the leafy crown is a circle of ~0.39*height around the canopy center (measured),
+// so the hit radius is that fraction of the rendered tree height
+const CANOPY_RADIUS_FRAC = 0.39
 
 // The tree is a weapon that sprouts from the player and points toward the cursor.
 // It is simulated as a weighted bob on a rigid arm (a pendulum): it eases toward
@@ -9,7 +19,8 @@ export class Tree {
   constructor() {
     const noPhysics = { collisionType: CollisionType.PreventCollision }
     this.trunk = new Actor({ z: 60, ...noPhysics })
-    this.canopy = new Actor({ z: 61, ...noPhysics })
+    // anchor at the bottom-center so the trunk root pivots in the player's hands
+    this.canopy = new Actor({ z: 61, anchor: vec(0.5, 1), ...noPhysics })
     this.canopyHi = new Actor({ z: 62, ...noPhysics })
 
     this.len = TREE.baseLen
@@ -51,10 +62,14 @@ export class Tree {
     this.mass = 1 + g * TREE.massPerSeed
     this.thickness = 10 + g * 0.5
 
-    this.trunk.graphics.use(new Rectangle({ width: this.len, height: this.thickness, color: COL.trunk }))
-    this.canopy.graphics.use(new Circle({ radius: this.canopyR, color: COL.canopy }))
-    this.canopyHi.graphics.use(new Circle({ radius: this.canopyR * 0.55, color: COL.canopyHi }))
+    // the tree.png sprite IS the whole weapon: trunk in the hands, canopy at the tip.
+    this.canopy.graphics.use(Resources.tree.toSprite())
+    this.trunk.graphics.visible = false
+    this.canopyHi.graphics.visible = false
   }
+
+  // true only during a click-swing's lunge window
+  get attacking() { return this.lungeT > 0 }
 
   sizeLabel(playerH) {
     return (this.len / playerH).toFixed(1) + '×'
@@ -132,17 +147,17 @@ export class Tree {
     this.tanX = -ny; this.tanY = nx
     this.tipSpeed = Math.hypot(this.bvX, this.bvY)
 
-    // trunk: stretch a fixed-length rectangle to the current reach
-    this.trunk.pos = vec(ax + nx * reach * 0.5, ay + ny * reach * 0.5)
-    this.trunk.rotation = this.angle
-    this.trunk.scale = vec(reach / this.len, 1)
-
-    // canopy + swing pop
+    // tree sprite: base pinned at the hands (ax, ay), pointing along the arm so the
+    // canopy center lands on the tip. The image's "up" axis maps to the arm direction,
+    // so the rotation is the arm angle + 90°.
     if (this.canopyPop > 0) this.canopyPop = Math.max(0, this.canopyPop - dt / 0.18)
     const pop = 1 + 0.35 * this.canopyPop
-    this.canopy.pos = vec(this.tipX, this.tipY)
-    this.canopy.scale = vec(pop, pop)
-    this.canopyHi.pos = vec(this.tipX - this.canopyR * 0.3, this.tipY - this.canopyR * 0.3)
-    this.canopyHi.scale = vec(pop, pop)
+    const scale = (reach / (CANOPY_CENTER_FRAC * TREE_NATURAL_H)) * pop
+    this.canopy.pos = vec(ax, ay)
+    this.canopy.rotation = this.angle + Math.PI / 2
+    this.canopy.scale = vec(scale, scale)
+
+    // hit radius tracks the rendered crown so the hitbox matches the sprite
+    this.canopyR = scale * TREE_NATURAL_H * CANOPY_RADIUS_FRAC
   }
 }
