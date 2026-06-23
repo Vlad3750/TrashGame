@@ -1,13 +1,14 @@
-import { Actor, Circle, CollisionType, Color, Scene, vec } from 'excalibur'
+import { Actor, Animation, AnimationStrategy, Circle, CollisionType, Color, Scene, vec } from 'excalibur'
 import {
   BOSS, CHECKPOINTS, COL, ENEMIES, PLATFORMS, PLAYER,
   SEEDS, SEEDS_TO_BEAT_BOSS, WASTE, WORLD,
 } from './config.js'
 import { Player } from './player.js'
+import { Resources } from './resources.js'
 import { Tree } from './tree.js'
 import { hud } from './hud.js'
 
-const ENEMY = { w: 42, h: 42, speed: 75 }
+const ENEMY = { w: 72, h: 72, speed: 75 }
 
 // ---- geometry helpers ----
 const aabb = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
@@ -82,11 +83,16 @@ export class Level extends Scene {
       this.seedItems.push({ a, x: s.x, baseY: s.y, taken: false, phase: s.x * 0.01 })
     }
 
-    // enemies (grey trash blobs with red eyes)
+    // enemies (animated blobby sprite)
     for (const e of ENEMIES) {
-      const a = new Actor({ pos: vec(e.x, e.y), width: ENEMY.w, height: ENEMY.h, color: COL.enemy, z: 45, collisionType: CollisionType.PreventCollision })
-      const mkEye = (dx) => { const ey = new Actor({ pos: vec(dx, -6), width: 8, height: 8, z: 46 }); ey.graphics.use(new Circle({ radius: 4, color: COL.bossEye })); return ey }
-      a.addChild(mkEye(-8)); a.addChild(mkEye(8))
+      const a = new Actor({ pos: vec(e.x, e.y), width: ENEMY.w, height: ENEMY.h, z: 45, collisionType: CollisionType.PreventCollision })
+      const frames = [Resources.blobby1.toSprite(), Resources.blobby2.toSprite()]
+      for (const f of frames) f.destSize = { width: ENEMY.w, height: ENEMY.h }
+      const anim = new Animation({
+        frames: frames.map((graphic) => ({ graphic, duration: 250 })),
+        strategy: AnimationStrategy.Loop,
+      })
+      a.graphics.use(anim)
       this.add(a)
       this.enemies.push({ a, baseX: e.x, y: e.y, range: e.range, dir: 1, alive: true })
     }
@@ -153,6 +159,7 @@ export class Level extends Scene {
       e.a.pos.x += e.dir * ENEMY.speed * dt
       if (e.a.pos.x > e.baseX + e.range) { e.a.pos.x = e.baseX + e.range; e.dir = -1 }
       else if (e.a.pos.x < e.baseX - e.range) { e.a.pos.x = e.baseX - e.range; e.dir = 1 }
+      e.a.graphics.current.flipHorizontal = e.dir < 0
 
       const er = { x: e.a.pos.x - ENEMY.w / 2, y: e.a.pos.y - ENEMY.h / 2, w: ENEMY.w, h: ENEMY.h }
       // tree hit?

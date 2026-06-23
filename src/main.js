@@ -1,6 +1,7 @@
 import { DisplayMode, Engine, SolverStrategy, vec } from 'excalibur'
 import { COL, PHYS, VIEW } from './config.js'
 import { Level } from './level.js'
+import { loader } from './resources.js'
 import { hud } from './hud.js'
 import './style.css'
 
@@ -22,7 +23,7 @@ game.addScene('level', new Level())
 
 hud.onPlay(async () => {
   hud.showIntro(false)
-  await game.start()
+  await game.start(loader)
   game.goToScene('level')
 })
 
