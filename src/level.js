@@ -1,11 +1,12 @@
 import { Actor, Animation, AnimationStrategy, Circle, CollisionType, Color, Scene, vec } from 'excalibur'
 import {
   BOSS, CHECKPOINTS, COL, ENEMIES, PLATFORMS, PLAYER,
-  SEEDS, SEEDS_TO_BEAT_BOSS, WASTE, WORLD,
+  SEEDS, SEEDS_TO_BEAT_BOSS, TREE, WASTE, WORLD,
 } from './config.js'
 import { Player } from './player.js'
 import { Resources } from './resources.js'
 import { Tree } from './tree.js'
+import { Particles } from './particles.js'
 import { hud } from './hud.js'
 
 const ENEMY = { w: 72, h: 72, speed: 75 }
@@ -43,6 +44,12 @@ export class Level extends Scene {
 
     this.tree = new Tree()
     this.tree.addTo(this)
+
+    this.particles = new Particles(this)
+    this.dustCd = 0
+
+    // click = swing the tree
+    engine.input.pointers.primary.on('down', () => this._onClick())
 
     this.camera.strategy.elasticToActor(this.player, 0.12, 0.16)
     this.camera.zoom = 1
@@ -124,16 +131,23 @@ export class Level extends Scene {
     this.t += dt
     this.bossMsgCd = Math.max(0, this.bossMsgCd - dt)
 
-    this.player.control(engine, this.platformRects, dt)
+    // bigger tree = heavier = slower run/jump
+    const weight = Math.min(this.seeds, TREE.maxSeedsForGrowth) / TREE.maxSeedsForGrowth
+    this.player.control(engine, this.platformRects, dt, weight)
 
     // keep player inside the world horizontally
     this.player.pos.x = Math.max(WORLD.left + PLAYER.w / 2, Math.min(WORLD.right - PLAYER.w / 2, this.player.pos.x))
 
-    // aim the tree at the cursor
+    // landing impact + running dust
+    if (this.player.justLanded) { this._landFx(this.player.justLanded); this.player.justLanded = 0 }
+    this.dustCd = Math.max(0, this.dustCd - dt)
+    if (this.player.moving && this.dustCd <= 0) { this._walkDust(); this.dustCd = 0.13 }
+
+    // simulate the tree (pendulum on a rigid arm)
     let cur = engine.input.pointers.primary.lastWorldPos
     if (!cur || (cur.x === 0 && cur.y === 0)) cur = vec(this.player.pos.x + this.player.facing * 120, this.player.pos.y)
     this.tree.setSeeds(this.seeds)
-    this.tree.aim(this.player.pos, cur)
+    this.tree.update(this.player.pos, cur, dt)
 
     this._animateScenery()
     this._enemies(dt)
@@ -141,6 +155,7 @@ export class Level extends Scene {
     this._hazards()
     this._checkpoints()
     this._boss()
+    this.particles.update(dt)
   }
 
   _animateScenery() {
@@ -166,11 +181,14 @@ export class Level extends Scene {
       if (circleRect(this.tree.tipX, this.tree.tipY, this.tree.canopyR, er)) {
         e.alive = false
         e.a.kill()
+        this.particles.burst(e.a.pos.x, e.a.pos.y, { count: 14, color: COL.enemy, speed: 210, gravity: 800, drag: 2.4, life: 0.5, size: 4, sizeVar: 2 })
+        this.particles.burst(e.a.pos.x, e.a.pos.y, { count: 8, color: COL.canopy, speed: 150, gravity: 450, drag: 2.2, life: 0.6, size: 3, sizeVar: 1.5 })
+        this._shake(7, 150)
         hud.banner('🌳 Enemy uprooted!', 'good')
         continue
       }
       // touch death?
-      if (aabb(this._playerRect(), er)) this._die('Hit by trash! Back to checkpoint')
+      if (aabb(this._playerRect(), er)) this._death('Hit by trash! Back to checkpoint', COL.player, 9)
     }
   }
 
@@ -182,6 +200,9 @@ export class Level extends Scene {
         s.taken = true
         s.a.kill()
         this.seeds++
+        this.particles.burst(s.a.pos.x, s.a.pos.y, { count: 11, color: COL.seed, speed: 150, speedVar: 80, gravity: 220, drag: 3, life: 0.45, size: 3, sizeVar: 1.5 })
+        this.particles.burst(s.a.pos.x, s.a.pos.y, { count: 5, color: COL.canopyHi, speed: 110, gravity: 150, drag: 3, life: 0.5, size: 2.5 })
+        this._shake(2, 70)
         hud.setSeeds(this.seeds, SEEDS_TO_BEAT_BOSS)
         const ready = this.seeds >= SEEDS_TO_BEAT_BOSS
         hud.setTree(this.tree.sizeLabel(PLAYER.h) /* updated next frame */, ready)
@@ -196,7 +217,7 @@ export class Level extends Scene {
   _hazards() {
     const pr = this._playerRect()
     for (const w of this.wasteRects) {
-      if (aabb(pr, w)) { this._die('☠️ Toxic waste! Respawning…'); return }
+      if (aabb(pr, w)) { this._death('☠️ Toxic waste! Respawning…', COL.wasteGlow, 13); return }
     }
   }
 
@@ -228,10 +249,17 @@ export class Level extends Scene {
       if (this.seeds >= SEEDS_TO_BEAT_BOSS) {
         b.alive = false
         b.a.kill()
+        const bc = { x: b.rect.x + b.rect.w / 2, y: b.rect.y + b.rect.h / 2 }
+        for (let k = 0; k < 3; k++) {
+          this.particles.burst(bc.x, bc.y, { count: 26, color: k % 2 ? COL.canopy : COL.bossAcid, speed: 330, speedVar: 200, gravity: 420, drag: 1.7, life: 0.95, size: 6, sizeVar: 3 })
+        }
+        this._shake(26, 650)
         this._win()
       } else if (this.bossMsgCd <= 0) {
         this.bossMsgCd = 0.9
         hud.banner(`Tree too weak (${this.tree.sizeLabel(PLAYER.h)})! Need ${SEEDS_TO_BEAT_BOSS} seeds — find another path.`, 'warn')
+        this.particles.burst(this.tree.tipX, this.tree.tipY, { count: 10, color: COL.bossAcid, speed: 190, gravity: 320, drag: 2.4, life: 0.4, size: 3, sizeVar: 1.5 })
+        this._shake(8, 180)
         // knock the player back toward the seeds
         const away = this.player.pos.x < BOSS.x ? -1 : 1
         this.player.vel.x = away * 420
@@ -240,14 +268,53 @@ export class Level extends Scene {
       return
     }
     // touching the titan's body is lethal
-    if (aabb(this._playerRect(), b.rect)) this._die('The Titan swatted you!')
+    if (aabb(this._playerRect(), b.rect)) this._death('The Titan swatted you!', COL.bossEye, 12)
+  }
+
+  // ---------- juice helpers ----------
+  _shake(mag, durationMs) {
+    this.camera.shake(mag, mag, durationMs)
+  }
+
+  _onClick() {
+    if (this.won || !this.player || this.player.dead) return
+    this.tree.swing()
+    const dir = Math.atan2(this.tree.tanY * this.tree.swingSign, this.tree.tanX * this.tree.swingSign)
+    this.particles.burst(this.tree.tipX, this.tree.tipY, {
+      count: 9, color: COL.canopyHi, dir, spread: 1.0, speed: 250, speedVar: 130,
+      gravity: 240, drag: 2.6, life: 0.32, size: 4, sizeVar: 2,
+    })
+    const sizeF = this.tree.len / TREE.baseLen
+    this._shake(3 + sizeF * 1.4, 90)
+  }
+
+  _landFx(speed) {
+    const feetY = this.player.pos.y + PLAYER.h / 2
+    const f = Math.min(1, speed / 900)
+    this.particles.burst(this.player.pos.x, feetY, {
+      count: 6 + ((f * 8) | 0), color: COL.soil, dir: -Math.PI / 2, spread: 1.7,
+      speed: 90 + f * 130, speedVar: 60, gravity: 700, drag: 3, life: 0.3, size: 3, sizeVar: 2,
+    })
+    this._shake(2 + f * 7, 120)
+  }
+
+  _walkDust() {
+    const feetY = this.player.pos.y + PLAYER.h / 2
+    this.particles.burst(this.player.pos.x - this.player.facing * 12, feetY, {
+      count: 2, color: COL.soil, dir: -Math.PI / 2 + this.player.facing * 0.5, spread: 0.5,
+      speed: 55, speedVar: 30, gravity: 300, drag: 3, life: 0.26, size: 2.5, sizeVar: 1,
+    })
   }
 
   _playerRect() {
     return { x: this.player.pos.x - PLAYER.w / 2, y: this.player.pos.y - PLAYER.h / 2, w: PLAYER.w, h: PLAYER.h }
   }
 
-  _die(msg) {
+  _death(msg, color = COL.wasteGlow, mag = 10) {
+    this.particles.burst(this.player.pos.x, this.player.pos.y, {
+      count: 16, color, speed: 210, speedVar: 110, gravity: 500, drag: 2.2, life: 0.5, size: 4, sizeVar: 2,
+    })
+    this._shake(mag, 260)
     this.player.respawn()
     hud.banner(msg, 'warn')
   }

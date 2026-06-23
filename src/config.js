@@ -15,13 +15,29 @@ export const PHYS = {
 
 export const PLAYER = { w: 40, h: 56 }
 
-// Tree (the cursor-aimed weapon). Grows with seeds.
+// Tree (the cursor-aimed weapon). Grows with seeds and behaves like a weighted
+// pendulum on a rigid arm — it trails when you move and sags under gravity.
 export const TREE = {
   baseLen: 72,          // px reach at 0 seeds
   lenPerSeed: 7.2,      // +px reach per seed  -> 20 seeds = 216px (>3x player height)
   baseCanopy: 24,       // px canopy radius at 0 seeds
   canopyPerSeed: 1.8,   // +px per seed
   maxSeedsForGrowth: 30,
+
+  // physics — bigger tree = more mass = slower aim, more lag, heavier swing
+  stiffness: 60,        // "muscle" pull toward the cursor aim
+  friction: 6,          // angular velocity damping (per second)
+  massPerSeed: 0.13,    // added mass per seed (slows rotation + swing)
+  gravitySag: 110,      // downward pull; heavier trees droop more
+  swingImpulse: 1500,   // tangential kick on click (divided by mass)
+  lungeAmount: 0.36,    // fraction of reach added during a swing lunge
+  lungeDur: 0.24,       // s — lunge in/out time
+}
+
+// Movement penalty for carrying a big tree (0 seeds = full speed).
+export const MOBILITY = {
+  moveSlowMax: 0.42,    // up to 42% slower run at max growth
+  jumpSlowMax: 0.12,    // up to 12% weaker jump at max growth
 }
 
 export const SEEDS_TO_BEAT_BOSS = 20

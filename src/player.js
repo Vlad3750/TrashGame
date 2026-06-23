@@ -2,7 +2,7 @@ import {
   Actor, Animation, AnimationStrategy, CollisionType, Keys,
   SpriteSheet, range, vec,
 } from 'excalibur'
-import { COL, PHYS, PLAYER } from './config.js'
+import { COL, MOBILITY, PHYS, PLAYER } from './config.js'
 import { Resources } from './resources.js'
 
 // sprite frames are 96x64; scale so the character reads ~72px tall (blobby size)
@@ -43,6 +43,8 @@ export class Player extends Actor {
     this.coyote = 0
     this.facing = 1
     this.dead = false
+    this.justLanded = 0   // impact speed on the frame we touch down (read+reset by level)
+    this.moving = false
   }
 
   onInitialize() {
@@ -76,14 +78,17 @@ export class Player extends Actor {
 
   get half() { return vec(PLAYER.w / 2, PLAYER.h / 2) }
 
-  control(engine, platforms, dt) {
+  // weight: 0 (no tree) .. 1 (max growth) — bigger tree = slower run + weaker jump
+  control(engine, platforms, dt, weight = 0) {
     if (this.dead) return
     const kb = engine.input.keyboard
+    const moveSpeed = PHYS.moveSpeed * (1 - weight * MOBILITY.moveSlowMax)
+    const jumpSpeed = PHYS.jumpSpeed * (1 - weight * MOBILITY.jumpSlowMax)
 
     // horizontal
     const left = LEFT.some((k) => kb.isHeld(k))
     const right = RIGHT.some((k) => kb.isHeld(k))
-    this.vel.x = (right ? PHYS.moveSpeed : 0) - (left ? PHYS.moveSpeed : 0)
+    this.vel.x = (right ? moveSpeed : 0) - (left ? moveSpeed : 0)
     if (this.vel.x > 0) this.facing = 1
     else if (this.vel.x < 0) this.facing = -1
 
@@ -91,10 +96,13 @@ export class Player extends Actor {
     const left_ = this.pos.x - PLAYER.w / 2
     const bottom = this.pos.y + PLAYER.h / 2
     const sensor = { x: left_ + 5, y: bottom - 2, w: PLAYER.w - 10, h: 8 }
+    const wasGrounded = this.grounded
+    const fallSpeed = this.vel.y
     const onGround =
       this.vel.y >= -20 && platforms.some((p) => aabbOverlap(sensor.x, sensor.y, sensor.w, sensor.h, p))
 
     if (onGround) {
+      if (!wasGrounded && fallSpeed > 140) this.justLanded = fallSpeed
       this.grounded = true
       this.coyote = PHYS.coyoteTime
       if (this.vel.y > 0) this.vel.y = 0
@@ -105,7 +113,7 @@ export class Player extends Actor {
 
     // jump
     if (JUMP.some((k) => kb.wasPressed(k)) && (this.grounded || this.coyote > 0)) {
-      this.vel.y = -PHYS.jumpSpeed
+      this.vel.y = -jumpSpeed
       this.grounded = false
       this.coyote = 0
     }
@@ -119,6 +127,7 @@ export class Player extends Actor {
     if (this.vel.y > 1200) this.vel.y = 1200
 
     this._updateAnim()
+    this.moving = this.grounded && Math.abs(this.vel.x) > 20
   }
 
   respawn() {
