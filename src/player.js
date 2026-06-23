@@ -2,13 +2,17 @@ import {
   Actor, Animation, AnimationStrategy, CollisionType, Keys,
   SpriteSheet, range, vec,
 } from 'excalibur'
-import { COL, MOBILITY, PHYS, PLAYER } from './config.js'
+import { COL, MOBILITY, PHYS, PLAYER, SLIDE } from './config.js'
 import { Resources } from './resources.js'
 
-// sprite frames are 96x64; scale so the character reads ~72px tall (blobby size)
+// sprite frames are 96x64; scale so the character reads ~110px tall
 const FRAME_W = 96
 const FRAME_H = 64
-const SPRITE_SCALE = 72 / FRAME_H
+const SPRITE_HEIGHT = 110
+const SPRITE_SCALE = SPRITE_HEIGHT / FRAME_H
+// feet are at the bottom row of the frame — align them to the collision-box bottom.
+// Excalibur multiplies graphics.offset by the sprite scale, so divide it back out.
+const SPRITE_OFFSET_Y = (PLAYER.h / 2 - SPRITE_HEIGHT / 2) / SPRITE_SCALE
 
 const mkAnim = (image, count, frameDuration, strategy = AnimationStrategy.Loop) => {
   const sheet = SpriteSheet.fromImageSource({
@@ -23,6 +27,7 @@ const mkAnim = (image, count, frameDuration, strategy = AnimationStrategy.Loop) 
 const LEFT = [Keys.A, Keys.Left]
 const RIGHT = [Keys.D, Keys.Right]
 const JUMP = [Keys.Space, Keys.W, Keys.Up]
+const SLIDE_KEYS = [Keys.S, Keys.Down, Keys.ShiftLeft, Keys.ShiftRight]
 
 const aabbOverlap = (ax, ay, aw, ah, b) =>
   ax < b.x + b.w && ax + aw > b.x && ay < b.y + b.h && ay + ah > b.y
@@ -45,6 +50,10 @@ export class Player extends Actor {
     this.dead = false
     this.justLanded = 0   // impact speed on the frame we touch down (read+reset by level)
     this.moving = false
+    this.sliding = false
+    this.slideT = 0
+    this.slideCd = 0
+    this.slideDir = 1
   }
 
   onInitialize() {
@@ -53,17 +62,20 @@ export class Player extends Actor {
       run: mkAnim(Resources.charRun, 8, 70),
       jump: mkAnim(Resources.charJump, 6, 90, AnimationStrategy.Freeze),
       fall: mkAnim(Resources.charFall, 4, 110, AnimationStrategy.Freeze),
+      slide: mkAnim(Resources.charSlide, 4, 80, AnimationStrategy.Freeze),
     }
     for (const key of Object.keys(this.anims)) {
       this.graphics.add(key, this.anims[key])
     }
     this.currentAnim = 'idle'
     this.graphics.use('idle')
+    this.graphics.offset = vec(0, SPRITE_OFFSET_Y)
   }
 
   _updateAnim() {
     let next = 'idle'
-    if (!this.grounded) next = this.vel.y < 0 ? 'jump' : 'fall'
+    if (this.sliding) next = 'slide'
+    else if (!this.grounded) next = this.vel.y < 0 ? 'jump' : 'fall'
     else if (this.vel.x !== 0) next = 'run'
 
     if (next !== this.currentAnim) {
@@ -85,12 +97,31 @@ export class Player extends Actor {
     const moveSpeed = PHYS.moveSpeed * (1 - weight * MOBILITY.moveSlowMax)
     const jumpSpeed = PHYS.jumpSpeed * (1 - weight * MOBILITY.jumpSlowMax)
 
-    // horizontal
+    this.slideCd = Math.max(0, this.slideCd - dt)
+
+    // horizontal input
     const left = LEFT.some((k) => kb.isHeld(k))
     const right = RIGHT.some((k) => kb.isHeld(k))
-    this.vel.x = (right ? moveSpeed : 0) - (left ? moveSpeed : 0)
-    if (this.vel.x > 0) this.facing = 1
-    else if (this.vel.x < 0) this.facing = -1
+
+    // start a slide: grounded, off cooldown, and already moving
+    const wantSlide = SLIDE_KEYS.some((k) => kb.wasPressed(k))
+    if (!this.sliding && this.grounded && this.slideCd <= 0 && wantSlide && Math.abs(this.vel.x) > SLIDE.minSpeed) {
+      this.sliding = true
+      this.slideT = SLIDE.duration
+      this.slideDir = this.facing
+    }
+
+    if (this.sliding) {
+      // locked forward dash that eases from slide speed back to run speed
+      this.slideT -= dt
+      const k = Math.max(0, this.slideT / SLIDE.duration)
+      this.vel.x = this.slideDir * (moveSpeed + (SLIDE.speed - moveSpeed) * k)
+      this.facing = this.slideDir
+    } else {
+      this.vel.x = (right ? moveSpeed : 0) - (left ? moveSpeed : 0)
+      if (this.vel.x > 0) this.facing = 1
+      else if (this.vel.x < 0) this.facing = -1
+    }
 
     // ground check via foot sensor
     const left_ = this.pos.x - PLAYER.w / 2
@@ -109,6 +140,12 @@ export class Player extends Actor {
     } else {
       this.grounded = false
       this.coyote = Math.max(0, this.coyote - dt)
+    }
+
+    // end the slide when it times out or we leave the ground
+    if (this.sliding && (this.slideT <= 0 || !this.grounded)) {
+      this.sliding = false
+      this.slideCd = SLIDE.cooldown
     }
 
     // jump

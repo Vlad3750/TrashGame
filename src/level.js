@@ -1,7 +1,7 @@
 import { Actor, Animation, AnimationStrategy, Circle, CollisionType, Color, Scene, vec } from 'excalibur'
 import {
   BOSS, CHECKPOINTS, COL, ENEMIES, PLATFORMS, PLAYER,
-  SEEDS, SEEDS_TO_BEAT_BOSS, TREE, WASTE, WORLD,
+  SEEDS, SEEDS_TO_BEAT_BOSS, TREE, VIEW, WASTE, WORLD,
 } from './config.js'
 import { Player } from './player.js'
 import { Resources } from './resources.js'
@@ -48,6 +48,10 @@ export class Level extends Scene {
     this.particles = new Particles(this)
     this.dustCd = 0
 
+    // trash that periodically erupts from the toxic pools and falls back in
+    this.wasteTrash = []
+    this.spurtCd = 0
+
     // click = swing the tree
     engine.input.pointers.primary.on('down', () => this._onClick())
 
@@ -59,10 +63,15 @@ export class Level extends Scene {
   }
 
   _buildWorld() {
-    // distant hills for depth
-    for (const h of [{ x: 600, y: 760, w: 1400, c: '#13243a' }, { x: 2600, y: 720, w: 1800, c: '#102033' }, { x: 4200, y: 780, w: 1600, c: '#0e1b2c' }]) {
-      this.add(new Actor({ pos: vec(h.x, h.y), width: h.w, height: 600, color: Color.fromHex(h.c), z: 1, collisionType: CollisionType.PreventCollision }))
-    }
+    // forest backdrop — a screen-filling actor that follows the camera (z below everything).
+    // Scale to "cover" the viewport (preserve aspect, crop overflow) plus a small margin.
+    const BG_W = 928, BG_H = 793
+    const cover = Math.max(VIEW.width / BG_W, VIEW.height / BG_H) * 1.15
+    const bgSprite = Resources.background.toSprite()
+    bgSprite.destSize = { width: Math.ceil(BG_W * cover), height: Math.ceil(BG_H * cover) }
+    this.bg = new Actor({ pos: vec(0, 0), z: -10, collisionType: CollisionType.PreventCollision })
+    this.bg.graphics.use(bgSprite)
+    this.add(this.bg)
 
     // solid platforms (brown body + grass cap)
     for (const p of PLATFORMS) {
@@ -113,19 +122,35 @@ export class Level extends Scene {
       this.checkpoints.push({ x: c.x, groundTop: c.y, standY: c.y - PLAYER.h / 2, flag, active: i === 0 })
     }
 
-    // boss — Garbage Titan
+    // boss — Garbage Titan: a giant blobby
     const bx = BOSS.x, gh = BOSS.h, gw = BOSS.w
     const cy = BOSS.y - gh / 2
-    const body = new Actor({ pos: vec(bx, cy), width: gw, height: gh, color: COL.boss, z: 48, collisionType: CollisionType.PreventCollision })
-    const eye = new Actor({ pos: vec(0, -gh * 0.18), width: 46, height: 46, z: 49 }); eye.graphics.use(new Circle({ radius: 23, color: COL.bossEye }))
-    body.addChild(eye)
-    for (const dx of [-50, 0, 55]) { const drip = new Actor({ pos: vec(dx, gh * 0.3), width: 18, height: 18, z: 49 }); drip.graphics.use(new Circle({ radius: 9, color: COL.bossAcid })); body.addChild(drip) }
+    const body = new Actor({ pos: vec(bx, cy), width: gw, height: gh, z: 48, collisionType: CollisionType.PreventCollision })
+    const bossFrames = [Resources.blobby1.toSprite(), Resources.blobby2.toSprite()]
+    for (const f of bossFrames) f.destSize = { width: gw, height: gh }
+    body.graphics.use(new Animation({
+      frames: bossFrames.map((graphic) => ({ graphic, duration: 300 })),
+      strategy: AnimationStrategy.Loop,
+    }))
     this.add(body)
-    this.boss = { a: body, alive: true, rect: { x: bx - gw / 2, y: BOSS.y - gh, w: gw, h: gh } }
+
+    // floating health bar above the Titan
+    const barW = gw + 20, barH = 18, barY = BOSS.y - gh - 30
+    this.add(new Actor({ pos: vec(bx, barY), width: barW + 6, height: barH + 6, color: Color.fromHex('#0b1220'), z: 55, collisionType: CollisionType.PreventCollision }))
+    const fill = new Actor({ pos: vec(bx - barW / 2, barY), anchor: vec(0, 0.5), width: barW, height: barH, color: COL.flagOn, z: 56, collisionType: CollisionType.PreventCollision })
+    this.add(fill)
+
+    this.boss = {
+      a: body, alive: true, hp: BOSS.maxHp, hitCd: 0,
+      bar: { fill, w: barW }, barY,
+      rect: { x: bx - gw / 2, y: BOSS.y - gh, w: gw, h: gh },
+    }
   }
 
   // ---------- per-frame ----------
   onPostUpdate(engine, elapsedMs) {
+    // keep the sky backdrop centered on the camera so it always fills the view
+    if (this.bg) this.bg.pos = this.camera.pos.clone()
     if (this.won || !this.player) return
     const dt = Math.min(elapsedMs / 1000, 0.05)
     this.t += dt
@@ -150,11 +175,12 @@ export class Level extends Scene {
     this.tree.update(this.player.pos, cur, dt)
 
     this._animateScenery()
+    this._wasteSpurts(dt)
     this._enemies(dt)
     this._pickups()
     this._hazards()
     this._checkpoints()
-    this._boss()
+    this._boss(dt)
     this.particles.update(dt)
   }
 
@@ -168,6 +194,50 @@ export class Level extends Scene {
     }
   }
 
+  // Trash chunks erupt out of the toxic pools, arc just above the ground, then
+  // fall back in with a little splash. Cheap self-managed actors (like particles).
+  _wasteSpurts(dt) {
+    const GRAV = 900
+
+    // spawn a new chunk every so often from a random pool
+    this.spurtCd -= dt
+    if (this.spurtCd <= 0 && this.wasteRects.length) {
+      this.spurtCd = 0.05 + Math.random() * 0.12
+      const w = this.wasteRects[(Math.random() * this.wasteRects.length) | 0]
+      const x = w.x + 10 + Math.random() * (w.w - 20)
+      const surfaceY = w.y + 7
+      // randomly a (smaller) plastic bottle or a (bigger) oil canister
+      const isBottle = Math.random() < 0.5
+      const sprite = (isBottle ? Resources.plasticBottle : Resources.oilCanister).toSprite()
+      const size = isBottle ? 16 + Math.random() * 8 : 38 + Math.random() * 18
+      sprite.destSize = { width: size, height: size }
+      const a = new Actor({ pos: vec(x, surfaceY), z: 6, collisionType: CollisionType.PreventCollision })
+      a.graphics.use(sprite)
+      this.add(a)
+      this.wasteTrash.push({
+        a,
+        surfaceY,
+        vx: (Math.random() - 0.5) * 60,
+        vy: -(420 + Math.random() * 200),   // pop ~100-180px above the surface
+        spin: (Math.random() - 0.5) * 10,
+      })
+    }
+
+    // integrate; remove when a chunk drops back to its pool surface
+    for (let i = this.wasteTrash.length - 1; i >= 0; i--) {
+      const t = this.wasteTrash[i]
+      t.vy += GRAV * dt
+      t.a.pos.x += t.vx * dt
+      t.a.pos.y += t.vy * dt
+      t.a.rotation += t.spin * dt
+      if (t.vy > 0 && t.a.pos.y >= t.surfaceY) {
+        this.particles.burst(t.a.pos.x, t.surfaceY, { count: 4, color: COL.wasteGlow, speed: 90, dir: -Math.PI / 2, spread: Math.PI / 2, gravity: 700, drag: 2.5, life: 0.3, size: 2.5, sizeVar: 1 })
+        t.a.kill()
+        this.wasteTrash.splice(i, 1)
+      }
+    }
+  }
+
   _enemies(dt) {
     for (const e of this.enemies) {
       if (!e.alive) continue
@@ -177,8 +247,8 @@ export class Level extends Scene {
       e.a.graphics.current.flipHorizontal = e.dir < 0
 
       const er = { x: e.a.pos.x - ENEMY.w / 2, y: e.a.pos.y - ENEMY.h / 2, w: ENEMY.w, h: ENEMY.h }
-      // tree hit?
-      if (circleRect(this.tree.tipX, this.tree.tipY, this.tree.canopyR, er)) {
+      // tree hit — only lands during a click-swing attack
+      if (this.tree.attacking && circleRect(this.tree.tipX, this.tree.tipY, this.tree.canopyR, er)) {
         e.alive = false
         e.a.kill()
         this.particles.burst(e.a.pos.x, e.a.pos.y, { count: 14, color: COL.enemy, speed: 210, gravity: 800, drag: 2.4, life: 0.5, size: 4, sizeVar: 2 })
@@ -235,9 +305,11 @@ export class Level extends Scene {
     }
   }
 
-  _boss() {
+  _boss(dt = 0) {
     const b = this.boss
     if (!b.alive) return
+
+    b.hitCd = Math.max(0, b.hitCd - dt)
 
     if (!this.bossIntroShown && Math.abs(this.player.pos.x - BOSS.x) < 700) {
       this.bossIntroShown = true
@@ -247,9 +319,24 @@ export class Level extends Scene {
     const canopyHits = circleRect(this.tree.tipX, this.tree.tipY, this.tree.canopyR, b.rect)
     if (canopyHits) {
       if (this.seeds >= SEEDS_TO_BEAT_BOSS) {
+        if (b.hitCd > 0) return
+        b.hitCd = BOSS.hitCooldown
+        b.hp = Math.max(0, b.hp - 1)
+        this._updateBossBar()
+        const bc = { x: b.rect.x + b.rect.w / 2, y: b.rect.y + b.rect.h / 2 }
+
+        if (b.hp > 0) {
+          // a solid hit, but the Titan still stands
+          this.particles.burst(this.tree.tipX, this.tree.tipY, { count: 16, color: COL.bossAcid, speed: 260, speedVar: 160, gravity: 380, drag: 1.9, life: 0.5, size: 4, sizeVar: 2 })
+          this._shake(12, 220)
+          b.a.graphics.opacity = 0.4
+          this.engine.clock.schedule(() => { b.a.graphics.opacity = 1 }, 90)
+          return
+        }
+
         b.alive = false
         b.a.kill()
-        const bc = { x: b.rect.x + b.rect.w / 2, y: b.rect.y + b.rect.h / 2 }
+        b.bar.fill.kill()
         for (let k = 0; k < 3; k++) {
           this.particles.burst(bc.x, bc.y, { count: 26, color: k % 2 ? COL.canopy : COL.bossAcid, speed: 330, speedVar: 200, gravity: 420, drag: 1.7, life: 0.95, size: 6, sizeVar: 3 })
         }
@@ -269,6 +356,14 @@ export class Level extends Scene {
     }
     // touching the titan's body is lethal
     if (aabb(this._playerRect(), b.rect)) this._death('The Titan swatted you!', COL.bossEye, 12)
+  }
+
+  _updateBossBar() {
+    const b = this.boss
+    const ratio = b.hp / BOSS.maxHp
+    b.bar.fill.scale = vec(ratio, 1)
+    // green when healthy, shading to red as it drops
+    b.bar.fill.color = ratio > 0.5 ? COL.flagOn : ratio > 0.25 ? COL.seed : COL.bossEye
   }
 
   // ---------- juice helpers ----------
@@ -321,6 +416,11 @@ export class Level extends Scene {
 
   _win() {
     this.won = true
+    // freeze the player so physics stops moving it once the game is over
+    this.player.vel = vec(0, 0)
+    this.player.acc = vec(0, 0)
+    this.player.body.collisionType = CollisionType.Fixed
+    this.player.graphics.use('idle')
     hud.banner('🌍 The Garbage Titan falls — the world turns green!', 'good')
     hud.showWin(true)
   }

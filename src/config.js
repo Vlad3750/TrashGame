@@ -15,11 +15,19 @@ export const PHYS = {
 
 export const PLAYER = { w: 40, h: 56 }
 
+// ground slide: a quick low dash that bursts forward then eases back to run speed
+export const SLIDE = {
+  speed: 600,       // px/s burst speed at the start of a slide
+  duration: 0.42,   // s the slide lasts
+  cooldown: 0.3,    // s before you can slide again
+  minSpeed: 30,     // must be moving at least this fast to start a slide
+}
+
 // Tree (the cursor-aimed weapon). Grows with seeds and behaves like a weighted
 // pendulum on a rigid arm — it trails when you move and sags under gravity.
 export const TREE = {
   baseLen: 72,          // px reach at 0 seeds
-  lenPerSeed: 7.2,      // +px reach per seed  -> 20 seeds = 216px (>3x player height)
+  lenPerSeed: 3.0,      // +px reach per seed  -> 20 seeds = 132px
   baseCanopy: 24,       // px canopy radius at 0 seeds
   canopyPerSeed: 1.8,   // +px per seed
   maxSeedsForGrowth: 30,
@@ -36,7 +44,7 @@ export const TREE = {
 
 // Movement penalty for carrying a big tree (0 seeds = full speed).
 export const MOBILITY = {
-  moveSlowMax: 0.42,    // up to 42% slower run at max growth
+  moveSlowMax: 0.20,    // up to 20% slower run at max growth
   jumpSlowMax: 0.12,    // up to 12% weaker jump at max growth
 }
 
@@ -135,6 +143,6 @@ export const CHECKPOINTS = [
   { x: 4200, y: GROUND_TOP },
 ]
 
-export const BOSS = { x: 4950, y: GROUND_TOP, w: 190, h: 270 }
+export const BOSS = { x: 4950, y: GROUND_TOP, w: 190, h: 270, maxHp: 6, hitCooldown: 0.45 }
 
 export const WORLD = { left: 0, right: 5400, top: -200, bottom: 1240 }
