@@ -1,5 +1,24 @@
-import { Actor, Circle, CollisionType, Keys, vec } from 'excalibur'
-import { COL, PHYS, PLAYER } from './config.js'
+import {
+  Actor, Animation, AnimationStrategy, CollisionType, Keys,
+  SpriteSheet, range, vec,
+} from 'excalibur'
+import { COL, MOBILITY, PHYS, PLAYER } from './config.js'
+import { Resources } from './resources.js'
+
+// sprite frames are 96x64; scale so the character reads ~72px tall (blobby size)
+const FRAME_W = 96
+const FRAME_H = 64
+const SPRITE_SCALE = 72 / FRAME_H
+
+const mkAnim = (image, count, frameDuration, strategy = AnimationStrategy.Loop) => {
+  const sheet = SpriteSheet.fromImageSource({
+    image,
+    grid: { rows: 1, columns: count, spriteWidth: FRAME_W, spriteHeight: FRAME_H },
+  })
+  const anim = Animation.fromSpriteSheet(sheet, range(0, count - 1), frameDuration, strategy)
+  anim.scale = vec(SPRITE_SCALE, SPRITE_SCALE)
+  return anim
+}
 
 const LEFT = [Keys.A, Keys.Left]
 const RIGHT = [Keys.D, Keys.Right]
@@ -24,31 +43,52 @@ export class Player extends Actor {
     this.coyote = 0
     this.facing = 1
     this.dead = false
+    this.justLanded = 0   // impact speed on the frame we touch down (read+reset by level)
+    this.moving = false
   }
 
   onInitialize() {
-    // simple face so the cyan block reads as a character
-    const mkEye = (dx) => {
-      const eye = new Actor({ pos: vec(dx, -8), width: 10, height: 10, z: 51 })
-      eye.graphics.use(new Circle({ radius: 5, color: COL.playerDark }))
-      return eye
+    this.anims = {
+      idle: mkAnim(Resources.charIdle, 8, 110),
+      run: mkAnim(Resources.charRun, 8, 70),
+      jump: mkAnim(Resources.charJump, 6, 90, AnimationStrategy.Freeze),
+      fall: mkAnim(Resources.charFall, 4, 110, AnimationStrategy.Freeze),
     }
-    this.eyeL = mkEye(-8)
-    this.eyeR = mkEye(8)
-    this.addChild(this.eyeL)
-    this.addChild(this.eyeR)
+    for (const key of Object.keys(this.anims)) {
+      this.graphics.add(key, this.anims[key])
+    }
+    this.currentAnim = 'idle'
+    this.graphics.use('idle')
+  }
+
+  _updateAnim() {
+    let next = 'idle'
+    if (!this.grounded) next = this.vel.y < 0 ? 'jump' : 'fall'
+    else if (this.vel.x !== 0) next = 'run'
+
+    if (next !== this.currentAnim) {
+      this.currentAnim = next
+      const anim = this.anims[next]
+      anim.reset()
+      this.graphics.use(next)
+    }
+    // face travel direction
+    this.graphics.flipHorizontal = this.facing < 0
   }
 
   get half() { return vec(PLAYER.w / 2, PLAYER.h / 2) }
 
-  control(engine, platforms, dt) {
+  // weight: 0 (no tree) .. 1 (max growth) — bigger tree = slower run + weaker jump
+  control(engine, platforms, dt, weight = 0) {
     if (this.dead) return
     const kb = engine.input.keyboard
+    const moveSpeed = PHYS.moveSpeed * (1 - weight * MOBILITY.moveSlowMax)
+    const jumpSpeed = PHYS.jumpSpeed * (1 - weight * MOBILITY.jumpSlowMax)
 
     // horizontal
     const left = LEFT.some((k) => kb.isHeld(k))
     const right = RIGHT.some((k) => kb.isHeld(k))
-    this.vel.x = (right ? PHYS.moveSpeed : 0) - (left ? PHYS.moveSpeed : 0)
+    this.vel.x = (right ? moveSpeed : 0) - (left ? moveSpeed : 0)
     if (this.vel.x > 0) this.facing = 1
     else if (this.vel.x < 0) this.facing = -1
 
@@ -56,10 +96,13 @@ export class Player extends Actor {
     const left_ = this.pos.x - PLAYER.w / 2
     const bottom = this.pos.y + PLAYER.h / 2
     const sensor = { x: left_ + 5, y: bottom - 2, w: PLAYER.w - 10, h: 8 }
+    const wasGrounded = this.grounded
+    const fallSpeed = this.vel.y
     const onGround =
       this.vel.y >= -20 && platforms.some((p) => aabbOverlap(sensor.x, sensor.y, sensor.w, sensor.h, p))
 
     if (onGround) {
+      if (!wasGrounded && fallSpeed > 140) this.justLanded = fallSpeed
       this.grounded = true
       this.coyote = PHYS.coyoteTime
       if (this.vel.y > 0) this.vel.y = 0
@@ -70,7 +113,7 @@ export class Player extends Actor {
 
     // jump
     if (JUMP.some((k) => kb.wasPressed(k)) && (this.grounded || this.coyote > 0)) {
-      this.vel.y = -PHYS.jumpSpeed
+      this.vel.y = -jumpSpeed
       this.grounded = false
       this.coyote = 0
     }
@@ -83,9 +126,8 @@ export class Player extends Actor {
     // terminal velocity (limits tunneling through thin platforms)
     if (this.vel.y > 1200) this.vel.y = 1200
 
-    // face the direction of travel
-    this.eyeL.pos.x = -8 + this.facing * 4
-    this.eyeR.pos.x = 8 + this.facing * 4
+    this._updateAnim()
+    this.moving = this.grounded && Math.abs(this.vel.x) > 20
   }
 
   respawn() {
